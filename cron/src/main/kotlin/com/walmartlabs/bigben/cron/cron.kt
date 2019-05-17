@@ -130,7 +130,7 @@ object CronRunner : Module {
                                         } catch (e: Exception) {
                                             l.error("error in running cron", e.rootCause()!!)
                                         }
-                                    }, 0, 1, SECONDS)
+                                    }, 0, 59, SECONDS)
     }
 
     private val parsers = ConcurrentHashMap<CronType, CronParser>()
