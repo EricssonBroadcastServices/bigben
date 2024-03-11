@@ -197,6 +197,16 @@
                 <version>${ktor.version}</version>
                 <scope>test</scope>
             </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>atomicfu</artifactId>
+                <version>0.12.11</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>atomicfu-common</artifactId>
+                <version>0.12.11</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
