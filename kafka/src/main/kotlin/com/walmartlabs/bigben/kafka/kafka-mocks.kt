@@ -29,8 +29,8 @@ import com.walmartlabs.bigben.utils.commons.PropsLoader
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.MockConsumer
-import org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST
 import org.apache.kafka.clients.producer.MockProducer
+import org.apache.kafka.clients.producer.RoundRobinPartitioner
 import org.apache.kafka.common.serialization.StringSerializer
 import java.util.concurrent.atomic.AtomicReference
 
@@ -42,7 +42,8 @@ class MockMessageProducerFactory : MessageProducerFactory {
         val LAST_MESSAGE = AtomicReference<EventResponse>()
     }
     override fun create(tenant: String, props: Json) = object : KafkaMessageProducer(tenant, props) {
-        override fun createProducer(props: Json) = MockProducer<String, String>(true, StringSerializer(), StringSerializer())
+        override fun createProducer(props: Json) = MockProducer<String, String>(true,
+            RoundRobinPartitioner(),StringSerializer(), StringSerializer())
         override fun produce(e: EventResponse): ListenableFuture<*> {
             return if (props.containsKey("fail")) {
                 immediateFailedFuture<Any>(Exception()) as ListenableFuture<*>
@@ -53,6 +54,6 @@ class MockMessageProducerFactory : MessageProducerFactory {
 
 class MockKafkaProcessor(props: PropsLoader) : KafkaMessageProcessor(props) {
     lateinit var consumer: MockConsumer<String, String>
-    override fun createConsumer(): Consumer<String, String> = MockConsumer<String, String>(EARLIEST).apply { consumer = this }
+    override fun createConsumer(): Consumer<String, String> = MockConsumer<String, String>("earliest").apply { consumer = this }
     override fun process(cr: ConsumerRecord<String, String>) = Futures.immediateFuture("" as Any)!!
 }
