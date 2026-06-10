@@ -40,6 +40,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.WakeupException
 import java.lang.Thread.currentThread
+import java.time.Duration
 import java.util.concurrent.Executors.newFixedThreadPool
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -142,7 +143,7 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
                 }
                 inPoll.set(true)
                 if (l.isDebugEnabled) l.debug("starting the poll for topic(s): $topics")
-                val records = consumer.poll(props.long("max.poll.wait.time"))
+                val records = consumer.poll(Duration.ofMillis(props.long("max.poll.wait.time")))
                 inPoll.set(false)
                 if (l.isDebugEnabled) l.debug("fetched ${records.count()} messages from topic(s): $topics")
                 if (records.count() > 0) {
