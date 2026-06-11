@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  bigben:
+    image: sandeepmalik/bigben:1
+    hostname: bigben
+    container_name: bigben
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=172.16.60.11:9092,172.16.60.12:9092
+      - CASSANDRA_SEED_IPS=172.16.60.20
+      - HZ_MEMBER_IPS=127.0.0.1
+    volumes:
+      - ../app/src/main/resources/bigben.yaml:/dist/bigben-config.yaml
+      - ./configs/overrides.yaml:/dist/bigben-overrides.yaml
+      - ./configs/log4j.xml:/dist/log4j-overrides.xml
+      - ./configs/hz.xml:/dist/hz.xml
+
