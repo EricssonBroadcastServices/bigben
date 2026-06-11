@@ -6,7 +6,7 @@ services:
     hostname: bigben
     container_name: bigben
     environment:
-      - KAFKA_BOOTSTRAP_SERVERS=172.16.60.11:9092,172.16.60.12:9092
+      - KAFKA_BOOTSTRAP_SERVERS=172.16.60.14:9092,172.16.60.13:9092,172.16.60.41:9092
       - CASSANDRA_SEED_IPS=172.16.60.20
       - HZ_MEMBER_IPS=127.0.0.1
     volumes:

@@ -24,13 +24,12 @@ import com.walmartlabs.bigben.utils.typeRefJson
 import io.ktor.application.call
 import io.ktor.application.install
 import io.ktor.client.HttpClient
+import io.ktor.client.call.call
 import io.ktor.client.engine.apache.Apache
 import io.ktor.client.request.accept
 import io.ktor.client.request.post
-import io.ktor.client.request.request
 import io.ktor.client.request.url
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.readText
+import io.ktor.client.response.readText
 import io.ktor.content.TextContent
 import io.ktor.features.ContentNegotiation
 import io.ktor.features.StatusPages
@@ -140,7 +139,7 @@ class APITests {
         val tenant = "test"
 
         assertEquals(runBlocking {
-            client.request<HttpResponse> {
+            client.call {
                 url("$server/events/tenant/register")
                 accept(Json)
                 method = Post
@@ -150,7 +149,7 @@ class APITests {
                         mapOf("eventProcessorClass" to "com.walmartlabs.bigben.processors.NoOpCustomClassProcessor")
                     ).json(), Json
                 )
-            }.status.value
+            }.response.status.value
         }, 200)
 
         // schedule 1000 events at exactly same time at the start of the minute:
@@ -433,13 +432,12 @@ class APITests {
 
     private fun HttpClient.call(url: String, body: Any?, method: HttpMethod = Post): Pair<Int, String> {
         return runBlocking {
-            client.request<HttpResponse> {
+            client.call {
                 url("$server$url")
                 accept(Json)
                 this.method = method
                 body?.let { this.body = TextContent(it.json(), Json) }
-            }.run { status.value to this.readText().apply { println("response: $this") } }
+            }.response.run { status.value to this.readText().apply { println("response: $this") } }
         }
     }
 }
-
