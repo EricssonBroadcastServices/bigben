@@ -52,6 +52,7 @@ import org.testng.annotations.BeforeMethod
 import org.testng.annotations.Test
 import java.lang.Thread.sleep
 import java.net.InetSocketAddress
+import java.time.Duration
 import java.time.ZonedDateTime
 import java.util.*
 import java.util.concurrent.CountDownLatch
@@ -559,7 +560,7 @@ class BigBenTests {
         consumer.subscribe(setOf("outbound"))
         while (true) {
             println("polling outbound")
-            val records = consumer.poll(3000)
+            val records = consumer.poll(Duration.ofMillis(3000))
             println(records.count())
             consumer.commitSync()
         }
