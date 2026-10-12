@@ -69,6 +69,7 @@ kafka:
       topics: ${bigben.inbound.topic.name:-null}
       max.poll.wait.time: ${max.poll.wait.time:-10000}
       message.retry.max.count: ${message.retry.max.count:-10}
+      unknown.exception.retries: ${unknown.exception.retries:-1000}
       config:
         key.deserializer: org.apache.kafka.common.serialization.StringDeserializer
         value.deserializer: org.apache.kafka.common.serialization.StringDeserializer

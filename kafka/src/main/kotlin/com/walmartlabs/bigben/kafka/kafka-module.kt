@@ -37,17 +37,18 @@ import org.apache.kafka.clients.consumer.ConsumerRebalanceListener
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.clients.consumer.OffsetAndMetadata
+import org.apache.kafka.common.KafkaException
 import org.apache.kafka.common.TopicPartition
+import org.apache.kafka.common.errors.RebalanceInProgressException
 import org.apache.kafka.common.errors.WakeupException
 import java.lang.Thread.currentThread
 import java.time.Duration
+import java.util.Queue
 import java.util.concurrent.Executors.newFixedThreadPool
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.Lock
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 object KafkaModule : Module {
 
@@ -89,7 +90,8 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
     private val topics = props.string("topics").split(",")
     private val closed = AtomicBoolean()
     private val autoCommit = props.boolean("config.enable.auto.commit")
-    private var numUnknownExceptionRetries = props.int("unknown.exception.retries", 5)
+    private val maxUnknownExceptionRetries = props.int("unknown.exception.retries", 5)
+    private var numUnknownExceptionRetries = maxUnknownExceptionRetries
 
     companion object {
         private val l = logger<KafkaMessageProcessor>()
@@ -113,38 +115,31 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
             if (!autoCommit)
                 l.info("offsets will be committed manually")
         }
-        val owned = AtomicReference<Set<TopicPartition>?>()
+        // incremental add/remove works for both eager and cooperative / KIP-848 rebalances
+        val owned = AtomicReference<Set<TopicPartition>>(emptySet())
         consumer.subscribe(topics, object : ConsumerRebalanceListener {
             override fun onPartitionsAssigned(partitions: MutableCollection<TopicPartition>) {
                 if (l.isDebugEnabled) l.debug("partitions assigned: ${partitions.groupBy { it.topic() }.mapValues {
                     it.value.map { it.partition() }.toSortedSet()
                 }.toSortedMap()}")
-                owned.set(partitions.toSet())
+                owned.updateAndGet { it + partitions }
             }
 
             override fun onPartitionsRevoked(partitions: MutableCollection<TopicPartition>) {
                 if (l.isDebugEnabled) l.debug("partitions revoked: ${partitions.groupBy { it.topic() }.mapValues {
                     it.value.map { it.partition() }.toSortedSet()
                 }.toSortedMap()}")
-                owned.set(null)
+                owned.updateAndGet { it - partitions }
             }
         })
-        val tasks = mutableListOf<() -> Unit>()
-        val inPoll = AtomicBoolean(false)
-        val taskLock: Lock = ReentrantLock()
+        val tasks = LinkedBlockingQueue<() -> Unit>()
 
         while (!closed.get()) {
             try {
-                taskLock.withLock {
-                    if (l.isDebugEnabled) l.debug("processing pending tasks")
-                    tasks.forEach { it() }
-                    tasks.clear()
-                    if (l.isDebugEnabled) l.debug("pending tasks processed successfully")
-                }
-                inPoll.set(true)
+                runPendingTasks(tasks)
                 if (l.isDebugEnabled) l.debug("starting the poll for topic(s): $topics")
                 val records = consumer.poll(Duration.ofMillis(props.long("max.poll.wait.time")))
-                inPoll.set(false)
+                numUnknownExceptionRetries = maxUnknownExceptionRetries
                 if (l.isDebugEnabled) l.debug("fetched ${records.count()} messages from topic(s): $topics")
                 if (records.count() > 0) {
                     val (offsets, range) = records.groupBy { TopicPartition(it.topic(), it.partition()) }.run {
@@ -163,20 +158,21 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
                             l.debug("resuming the partitions ${partitions.groupBy { it.topic() }.mapValues {
                                 it.value.map { it.partition() }.toSortedSet()
                             }.toSortedMap()}")
-                        consumer.resume(partitions intersect (owned.get() ?: emptySet()))
-                        val ownedSnapshot = owned.get()
-                        if (!autoCommit && ownedSnapshot != null) {
-                            val filtered = offsets.filterKeys { it in ownedSnapshot }
+                        consumer.resume(partitions intersect owned.get())
+                        val filtered = offsets.filterKeys { it in owned.get() }
+                        if (!autoCommit && filtered.isNotEmpty()) {
                             if (l.isDebugEnabled) l.debug("committing offsets $filtered")
                             try {
                                 consumer.commitSync(filtered)
-                            } catch (e: CommitFailedException) {
+                            } catch (e: KafkaException) {
+                                if (e !is CommitFailedException && e !is RebalanceInProgressException) throw e
                                 l.warn("bulk commit failed for offsets: $filtered, trying to each owned partition commit one by one")
                                 offsets.forEach {
-                                    // no snapshot here
-                                    if (owned.get() != null && it.key in owned.get()!!) {
+                                    if (it.key in owned.get()) {
                                         try {
                                             consumer.commitSync(mapOf(it.key to it.value))
+                                        } catch (e: WakeupException) {
+                                            throw e
                                         } catch (e: Exception) {
                                             l.warn("error in committing offset for ${it.key}, ignoring")
                                         }
@@ -193,22 +189,16 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
                             )
                         }.reduce().transform { this }.done({
                             l.error("error in processing messages: $range", it.rootCause())
-                            taskLock.withLock { tasks += this }
                             if (l.isDebugEnabled) l.debug("adding tasks for partition resume and offset commits")
-                            if (inPoll.get()) {
-                                if (l.isDebugEnabled) l.debug("waking up consumer stuck in poll")
-                                consumer.wakeup()
-                            }
+                            tasks.add(this)
+                            consumer.wakeup()
                         }) {
                             if (l.isDebugEnabled) {
                                 l.debug("messages processed successfully: $range")
                                 l.debug("adding tasks for partition resume and offset commits")
                             }
-                            taskLock.withLock { tasks += this }
-                            if (inPoll.get()) {
-                                if (l.isDebugEnabled) l.debug("waking up consumer stuck in poll")
-                                consumer.wakeup()
-                            }
+                            tasks.add(this)
+                            consumer.wakeup()
                         }
                     }
                 }
@@ -218,15 +208,27 @@ abstract class KafkaMessageProcessor(private val props: PropsLoader) : Runnable 
                     if (closed.get()) {
                         l.info("consumer has been closed for topic(s): $topics")
                     }
+                } else if (numUnknownExceptionRetries-- > 0) {
+                    l.warn("unknown exception, retrying ($numUnknownExceptionRetries retries left)", rc)
                 } else {
-                    if (numUnknownExceptionRetries-- > 0) l.warn("unknown exception, ignoring", rc)
-                    else l.error(
-                        "unknown exception, giving up after $numUnknownExceptionRetries retries, closing the consumer",
-                        rc
-                    )
+                    l.error("unknown exception, giving up after $maxUnknownExceptionRetries retries, closing the consumer", rc)
                     closed.set(true)
                 }
             }
+        }
+    }
+
+    // a wakeup() landing outside poll() surfaces in the next blocking call (e.g. commitSync); it is one-shot, so retry the task
+    private fun runPendingTasks(tasks: Queue<() -> Unit>) {
+        while (true) {
+            val task = tasks.peek() ?: return
+            try {
+                task()
+            } catch (e: WakeupException) {
+                if (l.isDebugEnabled) l.debug("pending task interrupted by wakeup, retrying")
+                continue
+            }
+            tasks.remove()
         }
     }
 }
